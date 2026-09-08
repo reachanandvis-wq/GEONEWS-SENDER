@@ -12,6 +12,12 @@ import threading
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
+# Force line-buffered stdout so print() statements from the background
+# thread show up in Render's logs immediately instead of sitting in a
+# buffer that never gets flushed (the process never exits on its own).
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
 import requests
 import schedule
 import trafilatura
@@ -121,7 +127,9 @@ def _run_news_fetch():
     all_articles = []
     for q in queries:
         try:
+            print(f"  querying: {q}")
             articles = google_news.get_news(q)
+            print(f"  got {len(articles)} results for: {q}")
             all_articles.extend(articles)
         except Exception as e:
             print(f"❌ Error fetching query '{q}':", e)

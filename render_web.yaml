@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: geo-news-bot
+    env: python
+    plan: starter          # free plan will spin down on idle and lose the scheduler between requests
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn -w 1 -k gthread --threads 4 --timeout 120 main_web:app"
+    healthCheckPath: /health
+    envVars:
+      - key: PHONE
+        sync: false
+      - key: APIKEY
+        sync: false
+      - key: EMAIL_SENDER
+        sync: false
+      - key: EMAIL_PASSWORD
+        sync: false
+      - key: EMAIL_RECEIVERS
+        sync: false
+      - key: MAX_ARTICLES
+        value: "30"
+      - key: INTERVAL_HOURS
+        value: "3"

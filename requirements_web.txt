@@ -1,0 +1,6 @@
+gnews
+trafilatura
+requests
+schedule
+flask
+gunicorn

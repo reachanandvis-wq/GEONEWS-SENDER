@@ -25,6 +25,7 @@ from gnews import GNews
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import smtplib
+import socket
 from flask import Flask, jsonify
 
 # ====================== CONFIG (from environment variables) ======================
@@ -70,6 +71,23 @@ def extract_content(url):
         return "Could not extract content"
 
 
+def _force_ipv4_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    """Force IPv4-only DNS resolution.
+
+    Render's outbound network has a broken/missing IPv6 route to Gmail's
+    SMTP servers, so the default resolver picking an AAAA (IPv6) record
+    first causes 'Network is unreachable' (errno 101). Forcing AF_INET
+    here makes the underlying socket.create_connection() used inside
+    smtplib only ever try IPv4 addresses. The hostname is still passed
+    to smtplib.SMTP() itself, so TLS certificate hostname verification
+    is unaffected.
+    """
+    return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+
+
+_orig_getaddrinfo = socket.getaddrinfo
+
+
 def send_emails(subject, body):
     print(f"Connecting to SMTP server to send to {len(EMAIL_RECEIVERS)} recipient(s)...")
     try:
@@ -82,7 +100,11 @@ def send_emails(subject, body):
         # Hard timeout: without this, a blocked/stalled outbound connection
         # (common on hosting platforms for SMTP ports) hangs forever with
         # no exception ever raised, which is why nothing was showing in logs.
-        server = smtplib.SMTP('smtp.gmail.com', 587, timeout=20)
+        socket.getaddrinfo = _force_ipv4_getaddrinfo
+        try:
+            server = smtplib.SMTP('smtp.gmail.com', 587, timeout=20)
+        finally:
+            socket.getaddrinfo = _orig_getaddrinfo
         print("Connected. Starting TLS...")
         server.starttls()
         print("TLS started. Logging in...")

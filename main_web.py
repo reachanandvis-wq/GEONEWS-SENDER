@@ -141,15 +141,19 @@ def _run_news_fetch():
         }
 
     processed = []
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        futures = {executor.submit(process, art): art for art in selected}
-        for future in futures:
-            try:
-                # hard cap per article so one stuck request can't stall the run
-                processed.append(future.result(timeout=20))
-            except Exception as e:
-                art = futures[future]
-                print(f"⚠️ Skipped article (timeout/error): {art.get('title', '?')} — {e}")
+    executor = ThreadPoolExecutor(max_workers=4)
+    futures = {executor.submit(process, art): art for art in selected}
+    for future in futures:
+        try:
+            # hard cap per article so one stuck request can't stall the run
+            processed.append(future.result(timeout=20))
+        except Exception as e:
+            art = futures[future]
+            print(f"⚠️ Skipped article (timeout/error): {art.get('title', '?')} — {e}")
+    # Don't wait for any straggler threads still stuck in a slow/hung
+    # network call — abandon them instead of blocking here forever.
+    executor.shutdown(wait=False)
+    print(f"Extraction done: {len(processed)}/{len(selected)} articles processed")
 
     now = datetime.now().strftime('%d %b %Y | %H:%M')
 

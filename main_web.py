@@ -71,6 +71,7 @@ def extract_content(url):
 
 
 def send_emails(subject, body):
+    print(f"Connecting to SMTP server to send to {len(EMAIL_RECEIVERS)} recipient(s)...")
     try:
         msg = MIMEMultipart()
         msg['From'] = EMAIL_SENDER
@@ -78,14 +79,24 @@ def send_emails(subject, body):
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'plain'))
 
-        server = smtplib.SMTP('smtp.gmail.com', 587)
+        # Hard timeout: without this, a blocked/stalled outbound connection
+        # (common on hosting platforms for SMTP ports) hangs forever with
+        # no exception ever raised, which is why nothing was showing in logs.
+        server = smtplib.SMTP('smtp.gmail.com', 587, timeout=20)
+        print("Connected. Starting TLS...")
         server.starttls()
+        print("TLS started. Logging in...")
         server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+        print("Logged in. Sending...")
         server.sendmail(EMAIL_SENDER, EMAIL_RECEIVERS, msg.as_string())
         server.quit()
         print(f"✅ Email sent to {len(EMAIL_RECEIVERS)} addresses")
+    except smtplib.SMTPAuthenticationError as e:
+        print(f"❌ Email auth error (wrong sender/app-password, or Gmail rejected login): {e}")
+    except (TimeoutError, OSError) as e:
+        print(f"❌ Email connection error (network/port likely blocked): {e}")
     except Exception as e:
-        print("❌ Email error:", e)
+        print(f"❌ Email error ({type(e).__name__}): {e}")
 
 
 def get_geopolitical_news():

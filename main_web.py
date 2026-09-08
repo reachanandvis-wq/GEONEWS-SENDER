@@ -22,9 +22,6 @@ import requests
 import schedule
 import trafilatura
 from gnews import GNews
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-import smtplib
 import socket
 from flask import Flask, jsonify
 
@@ -37,8 +34,9 @@ def env(name, required=True, default=None):
         sys.exit(1)
     return val
 
-EMAIL_SENDER = env("EMAIL_SENDER")
-EMAIL_PASSWORD = env("EMAIL_PASSWORD")
+EMAIL_SENDER = env("EMAIL_SENDER")                  # informational only now — the Apps Script's owner account is the real sender
+APPS_SCRIPT_URL = env("APPS_SCRIPT_URL")            # the /exec URL from your Apps Script deployment
+APPS_SCRIPT_SECRET = env("APPS_SCRIPT_SECRET")      # must match the SECRET constant in the Apps Script
 EMAIL_RECEIVERS = [e.strip() for e in env("EMAIL_RECEIVERS").split(",") if e.strip()]
 
 MAX_ARTICLES = int(os.environ.get("MAX_ARTICLES", "30"))
@@ -72,16 +70,8 @@ def extract_content(url):
 
 
 def _force_ipv4_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-    """Force IPv4-only DNS resolution.
-
-    Render's outbound network has a broken/missing IPv6 route to Gmail's
-    SMTP servers, so the default resolver picking an AAAA (IPv6) record
-    first causes 'Network is unreachable' (errno 101). Forcing AF_INET
-    here makes the underlying socket.create_connection() used inside
-    smtplib only ever try IPv4 addresses. The hostname is still passed
-    to smtplib.SMTP() itself, so TLS certificate hostname verification
-    is unaffected.
-    """
+    """Force IPv4-only DNS resolution (kept in case SMTP is ever re-enabled
+    on a paid plan). Not used by the current Brevo HTTP-based sender."""
     return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
 
 
@@ -89,36 +79,38 @@ _orig_getaddrinfo = socket.getaddrinfo
 
 
 def send_emails(subject, body):
-    print(f"Connecting to SMTP server to send to {len(EMAIL_RECEIVERS)} recipient(s)...")
-    try:
-        msg = MIMEMultipart()
-        msg['From'] = EMAIL_SENDER
-        msg['To'] = ", ".join(EMAIL_RECEIVERS)
-        msg['Subject'] = subject
-        msg.attach(MIMEText(body, 'plain'))
+    """Send via a Google Apps Script relay (calls MailApp.sendEmail under
+    your Gmail account) over plain HTTPS.
 
-        # Hard timeout: without this, a blocked/stalled outbound connection
-        # (common on hosting platforms for SMTP ports) hangs forever with
-        # no exception ever raised, which is why nothing was showing in logs.
-        socket.getaddrinfo = _force_ipv4_getaddrinfo
+    Render's free web services block outbound traffic on SMTP ports
+    25/465/587 entirely (confirmed platform policy, not fixable in code).
+    Routing through an HTTPS-only relay sidesteps that completely, and
+    since the relay runs as your own Gmail account, the email is sent
+    from your real address with no third-party email service involved.
+    """
+    print(f"Sending email via Apps Script relay to {len(EMAIL_RECEIVERS)} recipient(s)...")
+    try:
+        resp = requests.post(
+            APPS_SCRIPT_URL,
+            json={
+                "secret": APPS_SCRIPT_SECRET,
+                "recipients": EMAIL_RECEIVERS,
+                "subject": subject,
+                "body": body,
+            },
+            timeout=30,
+        )
         try:
-            server = smtplib.SMTP('smtp.gmail.com', 587, timeout=20)
-        finally:
-            socket.getaddrinfo = _orig_getaddrinfo
-        print("Connected. Starting TLS...")
-        server.starttls()
-        print("TLS started. Logging in...")
-        server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-        print("Logged in. Sending...")
-        server.sendmail(EMAIL_SENDER, EMAIL_RECEIVERS, msg.as_string())
-        server.quit()
-        print(f"✅ Email sent to {len(EMAIL_RECEIVERS)} addresses")
-    except smtplib.SMTPAuthenticationError as e:
-        print(f"❌ Email auth error (wrong sender/app-password, or Gmail rejected login): {e}")
-    except (TimeoutError, OSError) as e:
-        print(f"❌ Email connection error (network/port likely blocked): {e}")
-    except Exception as e:
-        print(f"❌ Email error ({type(e).__name__}): {e}")
+            result = resp.json()
+        except ValueError:
+            result = {"raw": resp.text}
+
+        if resp.status_code == 200 and "error" not in result:
+            print(f"✅ Email sent to {result.get('count', len(EMAIL_RECEIVERS))} addresses")
+        else:
+            print(f"❌ Email send failed ({resp.status_code}): {result}")
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Email request error: {e}")
 
 
 def get_geopolitical_news():
